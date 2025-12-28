@@ -45,6 +45,8 @@ pub struct TaskManagerInner {
     tasks: [TaskControlBlock; MAX_APP_NUM],
     /// id of current `Running` task
     current_task: usize,
+    /// map syscall id to array idx
+    syscall_count_idx: [usize; 1000],
 }
 
 lazy_static! {
@@ -54,17 +56,25 @@ lazy_static! {
         let mut tasks = [TaskControlBlock {
             task_cx: TaskContext::zero_init(),
             task_status: TaskStatus::UnInit,
+            syscall_count: [0; 10],
         }; MAX_APP_NUM];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.task_cx = TaskContext::goto_restore(init_app_cx(i));
             task.task_status = TaskStatus::Ready;
         }
+        let mut syscall_count_idx = [0; 1000];
+        syscall_count_idx[64]=0;
+        syscall_count_idx[93]=1;
+        syscall_count_idx[124]=2;
+        syscall_count_idx[169]=3;
+        syscall_count_idx[410]=4;
         TaskManager {
             num_app,
             inner: unsafe {
                 UPSafeCell::new(TaskManagerInner {
                     tasks,
                     current_task: 0,
+                    syscall_count_idx,
                 })
             },
         }
@@ -135,6 +145,21 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    fn inc_current_syscall_count(&self, syscall_id: usize) {
+        assert!(syscall_id < 1000);
+        let mut inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let inner_idx = inner.syscall_count_idx[syscall_id];
+        inner.tasks[current].syscall_count[inner_idx]+=1;
+    }
+
+    fn get_current_syscall_count(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        let current = inner.current_task;
+        let inner_idx = inner.syscall_count_idx[syscall_id];
+        inner.tasks[current].syscall_count[inner_idx]
+    }
 }
 
 /// Run the first task in task list.
@@ -168,4 +193,14 @@ pub fn suspend_current_and_run_next() {
 pub fn exit_current_and_run_next() {
     mark_current_exited();
     run_next_task();
+}
+
+/// Increment the syscall count for the current task
+pub fn inc_current_syscall_count(syscall_id: usize) {
+    TASK_MANAGER.inc_current_syscall_count(syscall_id);
+}
+
+/// Get syscall count for the current task
+pub fn get_current_syscall_count(syscall_id: usize) -> usize {
+    TASK_MANAGER.get_current_syscall_count(syscall_id)
 }
